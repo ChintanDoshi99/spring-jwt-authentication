@@ -1,6 +1,9 @@
 package com.example.Authentication;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -11,6 +14,10 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import io.github.bucket4j.Bandwidth;
+import io.github.bucket4j.Bucket;
+import io.github.bucket4j.Bucket4j;
+import io.github.bucket4j.Refill;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,6 +32,11 @@ public class JwtFilter extends OncePerRequestFilter{
 	@Autowired
 	private UserDetailsService userDetailsService;
 	
+	private final Map<String,Bucket> userBuckets = new ConcurrentHashMap<>();
+	
+	private Bucket createNewBucket() {
+		return Bucket4j.builder().addLimit(Bandwidth.classic(5, Refill.greedy(5, Duration.ofMinutes(1)))).build();
+	}
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
 			throws ServletException, IOException {
@@ -36,6 +48,16 @@ public class JwtFilter extends OncePerRequestFilter{
 			if(username != null && SecurityContextHolder.getContext().getAuthentication()==null) {
 				UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 				if(jwtUtil.validateToken(token, userDetails)) {
+					
+					Bucket bucket =userBuckets.computeIfAbsent(username, k -> createNewBucket());
+					System.out.println("userbucket mapp" + userBuckets );
+					if(!bucket.tryConsume(1)) {
+						response.setStatus(429);
+						response.getWriter().write("Rate limit exceeded for user:"+username);
+						return;
+					}
+					
+					
 					UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken( userDetails,null,userDetails.getAuthorities());
 					authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 					SecurityContextHolder.getContext().setAuthentication(authToken);
